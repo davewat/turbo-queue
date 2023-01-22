@@ -1,6 +1,9 @@
-WIP - v0.1.1
-*Not ready for PRs yet*
+WIP *Not ready for PRs yet*
 
+### Install
+```
+pip install turbo-queue
+```
 
 # Turbo Queue
 
@@ -22,8 +25,39 @@ However, with Turbo Queue, we were able to max out our processors on a single sy
 YMMV.  This worked well for our use case: CPU intesive processes, moving large volumes of data to and from Kafka, and CPU dense hardware. The on-disk batches also provided insight to troubleshoot other issues further.  However, this may not be helpful in every situation.
 
 
-Until available on PyPI, you can install with:
+# Quickstart:
+### Enqueue data
 ```
-# with python and git installed on your system:
-python3 -m pip install --upgrade --force-reinstall "git+https://github.com/davewat/turbo-queue.git"
+## very basic example:
+
+import turbo_queue
+enqueue = turbo_queue.enqueue()
+enqueue.queue_name = "data_in"
+enqueue.root_path = "/path/to/queue"
+enqueue.max_avail_files = 5
+enqueue.max_events_per_file = 1000
+enqueue.start()
+
+enqueue.update_enqueue_active_state()
+while enqueue.enqueue_active:
+    enqueue.add("""{"data":"add_to_queue"}""")
+    enqueue.update_enqueue_active_state()
+    # update_enqueue_active_state needs to be run at some frequency
+    # if the number of available files exceeds the max, the state will will be set to False
+    # this is the mechanism used to address downstream backup in the queue
+```
+
+### Dequeue data
+```
+## very basic example
+dequeue = fast_queue.dequeue(1)
+dequeue.root_path = "/path/to/queue"
+dequeue.queue_name = "data_in"
+
+get_data = dequeue.get()
+data = next(get_data)
+while data:
+    data = next(get_data)
+# data = None when the queue is currently empty
+# call next(get_data) again to check the queue for more data
 ```
