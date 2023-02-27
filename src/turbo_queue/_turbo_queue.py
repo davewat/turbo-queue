@@ -237,13 +237,14 @@ class enqueue(_turbo_queue_base):
     def __init__(self):
         self.desc = 'turbo_queue class for queue high performance'
         super().__init__()
+        self._create_epoch = 1 # default value to start
     #
     def _new_loading_db(self):
         path = f'{self.root_path}/{self.queue_name}'
         # Check whether the specified path exists or not
         self.check_path_and_create(path)
-        
-        self._db_name = f'{get_current_epoch_int()}_{uuid.uuid4()}.db'
+        self._create_epoch = get_current_epoch_int()
+        self._db_name = f'{self._create_epoch}_{uuid.uuid4()}.db'
         self.db_state = 'loading'
         self._db_path = f'{self.root_path}/{self.queue_name}/{self.db_state}_{self._db_name}'
         # improve:
@@ -289,18 +290,30 @@ class enqueue(_turbo_queue_base):
             self.insert_loading_db(dict_to_add)
             self.row_count += 1
             if self.row_count >= self.max_events_per_file:
-                # put on hold while processing, and force re-check on next loop
-                self.processing_hold = True
-                self.enqueue_active = False
-                #
-                self.row_count = 0
-                self._close_db()
-                rename(self._db_path, f'{self.root_path}/{self.queue_name}/avail_{self._db_name}')
-                self._new_loading_db()
-                self.update_enqueue_active_state()
-                self.processing_hold = False
+                self._roll_next_batch()
         return
 
+    def _roll_next_batch(self):
+        # put on hold while processing, and force re-check on next loop
+        self.processing_hold = True
+        self.enqueue_active = False
+        #
+        self.row_count = 0
+        self._close_db()
+        rename(self._db_path, f'{self.root_path}/{self.queue_name}/avail_{self._db_name}')
+        self._new_loading_db()
+        self.update_enqueue_active_state()
+        self.processing_hold = False
+        return
+    
+    def check_time(self):
+        """
+        provides method to check the time the batch has been loading, and if exceeds timeout,
+        roll to the next batch
+        """
+        if (self._create_epoch + int(self._update_file_interval)) < self.get_current_epoch_int():
+            self._roll_next_batch()
+        return
 
 
 class dequeue(_turbo_queue_base):
