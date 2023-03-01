@@ -88,7 +88,7 @@ class _turbo_queue_base:
             raise ValueError("Sorry, num_queues must be an integer > 0")
         self._num_queues = a
     #
-    # max_avail_files - maximum number of ready files - loading will pause when reached
+    # max_avail_files - maximum number of avail(able) files - loading will pause when reached
     @property
     def max_avail_files(self):
         return self._max_avail_files
@@ -98,7 +98,7 @@ class _turbo_queue_base:
             raise ValueError("Sorry, max_avail_files must be an integer > 0")
         self._max_avail_files = a
     #
-    # max_queue_files - maximum number of ready files assigned to a specific queue.loading will pause when reached
+    # max_queue_files - maximum number of ready files assigned to a specific queue - loading will pause when reached
     @property
     def max_queue_files(self):
         return self._max_queue_files
@@ -108,7 +108,7 @@ class _turbo_queue_base:
             raise ValueError("Sorry, max_queue_files must be an integer > 0")
         self._max_queue_files = a
     #
-    # max_events_per_file - maximum number of ready files assigned to a specific queue.loading will pause when reached
+    # max_events_per_file - maximum number of events in a batch - a new batch will be generated and used when reached, and this will be made available
     @property
     def max_events_per_file(self):
         return self._max_events_per_file
