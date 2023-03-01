@@ -5,6 +5,13 @@ WIP *Not ready for PRs yet*
 pip install turbo-queue
 ```
 
+### TBD:
+- timout for enqueue events to move to avail
+- cleanup on restart:
+  - move all assigned_ to avail_
+  - move all loading_ to avail_
+
+
 # Turbo Queue
 
 Turbo Queue was designed to solve a specific performance concern with Multiprocessing Queues in Python.  We found that as the number of processes subscribed to a single Multiprocessing Queue increased, the performance on the processes decreased.  This appeared to be due to contention, as the various processes are locking/unlocking the queue to get data.
@@ -61,3 +68,37 @@ while data:
 # data = None when the queue is currently empty
 # call next(get_data) again to check the queue for more data
 ```
+
+### How it works
+
+#### Enqueue - loading data into a queue
+A process begins using the enqueue class to load data into the "queue".  The "queue" is made up of files on disk.  The files are batches of data.  When the process has **filled** a batch, either by reaching the maximum items for a batch or by timeout (both configurable), the batch is "rolled" to be made "available" to a dequeue process to use, and a new batch file is created and filled.
+
+#### Dequeue - unloading data from a queue
+A process beging using the dequeue class to unload data from a "queue".  The "dequeue" process begins by scanning the assigned queue folder for any "available" files, which are "batches" of data.  If one is found, it takes ownership of the file to ensure another process doesn't use it.  Once owned (by a renaming process) the data items are "yielded" to the calling process.  When the batch is exausted, the file is deleted, and the dequeue process begins again to look for any available batches.
+
+#### File naming steps:
+
+1 - Enqueue creates a new, unique file for a batch of data:
+```
+loading_<epoch_time>_<uuid>.db
+```
+2 - Enqueue has filled the batch, and rolls it to avail:
+```
+#rename:
+loading_<epoch_time>_<uuid>.db
+# to:
+avail_<epoch_time>_<uuid>.db
+3 - Enqueue restarts the process, and creates a new, unique file for a batch of data
+
+4 - Dequeue searches for files named avail_*.  When one is selected, it is renamed to be used exclusively by the process:
+```
+# rename:
+avail_<epoch_time>_<uuid>.db
+# to:
+assigned_{self.proc_num}_<epoch_time>_<uuid>.db
+```
+The proc_num is provided by the calling process.  It allows insight to the process that is using the actual file.  Mostly useful for troubleshooting.
+
+5 - When dequeue has yielded all of the data in the batch, the file is deleted, and Dequeue looks for the next available avail_* file
+
