@@ -9,6 +9,7 @@ import os
 from os import rename
 from os import remove as file_remove
 from pathlib import Path
+import asyncio
 
 
 def get_current_epoch_int():
@@ -25,7 +26,7 @@ class _turbo_queue_base:
         self._max_avail_files = 1 # maximum number of avail files - loading will pause when reached
         self._max_queue_files = 1 # maximum number of assigned to queue files assigned to a specific queue.loading will pause when reached
         self._max_events_per_file = 80000 # maximum number of events per DB file that will be loaded, before a new DB file is created
-        self._update_file_interval = 1 # number of seconds to check files and update
+        self._max_batch_age = 10 # approximate maximum number of seconds before a batch is flushed and a new one created 
         self._enqueue_active = False # pause/ resume loading to file
         self._dequeue_active = True # pause/ resume loading to queues
         self._processing_hold = False # additional hold while processing DB rename and recreate
@@ -118,15 +119,15 @@ class _turbo_queue_base:
             raise ValueError("Sorry, max_events_per_file must be an integer > 0")
         self._max_events_per_file = a
     #
-    # update_file_interval - number of seconds to check files and update
+    # max_batch_age - number of seconds to check files and update
     @property
-    def update_file_interval(self):
-        return self._update_file_interval
-    @update_file_interval.setter
-    def update_file_interval(self, a):
+    def max_batch_age(self):
+        return self._max_batch_age
+    @max_batch_age.setter
+    def max_batch_age(self, a):
         if type(a) != int or a < 1:
-            raise ValueError("Sorry, update_file_interval must be an integer > 0")
-        self._update_file_interval = a
+            raise ValueError("Sorry, max_batch_age must be an integer > 0")
+        self._max_batch_age = a
     #
     # enqueue_active - pause/ resume loading to file
     @property
@@ -238,6 +239,10 @@ class enqueue(_turbo_queue_base):
         self.desc = 'turbo_queue class for queue high performance'
         super().__init__()
         self._create_epoch = 1 # default value to start
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.create_task(self.check_batch_age())
+        self.loop.run_forever()
     #
     def _new_loading_db(self):
         path = f'{self.root_path}/{self.queue_name}'
@@ -311,9 +316,15 @@ class enqueue(_turbo_queue_base):
         provides method to check the time the batch has been loading, and if exceeds timeout,
         roll to the next batch
         """
-        if (self._create_epoch + int(self._update_file_interval)) < self.get_current_epoch_int():
-            self._roll_next_batch()
+        
         return
+    
+    async def check_batch_age(self):
+        await asyncio.sleep(self._max_batch_age)
+        if (self._create_epoch + int(self._max_batch_age)) < get_current_epoch_int():
+            self._roll_next_batch()
+        self.loop.create_task(self.check_batch_age())
+
 
 
 class dequeue(_turbo_queue_base):
