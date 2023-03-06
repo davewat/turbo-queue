@@ -1,4 +1,5 @@
-WIP *Not ready for PRs yet*
+WIP  
+*Not ready for PRs yet*
 
 ### Install
 ```
@@ -75,7 +76,7 @@ while data:
 A process begins using the enqueue class to load data into the "queue".  The "queue" is made up of files on disk.  The files are batches of data.  When the process has **filled** a batch, either by reaching the maximum items for a batch or by timeout (both configurable), the batch is "rolled" to be made "available" to a dequeue process to use, and a new batch file is created and filled.
 
 #### Dequeue - unloading data from a queue
-A process beging using the dequeue class to unload data from a "queue".  The "dequeue" process begins by scanning the assigned queue folder for any "available" files, which are "batches" of data.  If one is found, it takes ownership of the file to ensure another process doesn't use it.  Once owned (by a renaming process) the data items are "yielded" to the calling process.  When the batch is exausted, the file is deleted, and the dequeue process begins again to look for any available batches.
+A process begins using the dequeue class to unload data from a "queue".  The "dequeue" process begins by scanning the assigned queue folder for any "available" files, which are "batches" of data.  If one is found, it takes ownership of the file to ensure another process doesn't use it.  Once owned (by a renaming process) the data items are "yielded" to the calling process.  When the batch is exausted, the file is deleted, and the dequeue process begins again to look for any available batches.
 
 #### File naming steps:
 
@@ -83,22 +84,23 @@ A process beging using the dequeue class to unload data from a "queue".  The "de
 ```
 loading_<epoch_time>_<uuid>.db
 ```
-2 - Enqueue has filled the batch, and rolls it to avail:
+2 - Enqueue has filled the batch, and "rolls" (by renaming the file) it to avail:
 ```
 #rename:
 loading_<epoch_time>_<uuid>.db
 # to:
 avail_<epoch_time>_<uuid>.db
-3 - Enqueue restarts the process, and creates a new, unique file for a batch of data
+```
+3 - Enqueue restarts the process, and creates a new, unique file for a batch of data  
 
-4 - Dequeue searches for files named avail_*.  When one is selected, it is renamed to be used exclusively by the process:
+4 - Dequeue searches for files named avail_*.  When one is selected, it is renamed to be used exclusively by the process:  
 ```
 # rename:
 avail_<epoch_time>_<uuid>.db
 # to:
-assigned_{self.proc_num}_<epoch_time>_<uuid>.db
-```
-The proc_num is provided by the calling process.  It allows insight to the process that is using the actual file.  Mostly useful for troubleshooting.
+assigned_<proc_num>_<epoch_time>_<uuid>.db
+```  
+The proc_num is provided by the calling process.  It allows insight to the process that is using the actual file.  Mostly useful for troubleshooting.  
 
-5 - When dequeue has yielded all of the data in the batch, the file is deleted, and Dequeue looks for the next available avail_* file
+5 - When dequeue has yielded all of the data in the batch, the file is deleted, and Dequeue looks for the next available avail_* file  
 
