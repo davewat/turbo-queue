@@ -11,10 +11,6 @@ from os import remove as file_remove
 from pathlib import Path
 import asyncio
 
-
-def get_current_epoch_int():
-    return int(time.time())
-
 class _turbo_queue_base:
     def __init__(self):
         #self._age = 0
@@ -30,12 +26,29 @@ class _turbo_queue_base:
         self._enqueue_active = False # pause/ resume loading to file
         self._dequeue_active = True # pause/ resume loading to queues
         self._processing_hold = False # additional hold while processing DB rename and recreate
-        self._drop_overflow = False # default of FALSE - used for TESTING ONLY - will DROP overflow ratehr than just change fold status
+        
+        # auto-recover stale events in the queue folder
+        # existing loading will be renamed to avail, to be picked up by the dequeue process when it is started
+        # existing or stale assigned 
+        self._recover_on_restart = True # on start, in-case of shutdown while processing
+        self._recover_on_stale = True # while running, check for stale events if processing stops
+        self._recover_on_stale_check_frequency = 300 # frequency to check in seconds
+        self._loading_stale_age = self._max_batch_age * 2 # default is _max_batch_age * 2 (seconds)
+        self._assigned_stale_age = 100 # this should be adjusted based on average time it takes to rpocess
+        
+        self._max_assigned_age = 100
+
+        self._drop_overflow = False # default of FALSE - used for TESTING ONLY - will DROP overflow rather than just change fold status
         self._db_conn = None
         self._db_cursor = None
         self._db_name = None
         self._db_path = None
-        
+    # utility:
+    def get_current_epoch_int(self):
+        return int(time.time())
+
+    def get_uuid(self):
+        return uuid.uuid4()
     #
     # queue_name - name of the queue
     @property
@@ -185,6 +198,27 @@ class _turbo_queue_base:
         self._db_conn = None
         return
     
+    def _recover_stale(self,match_prefix,new_prefix):
+        path_to_files = f'{self.root_path}/{self.queue_name}'
+        try:
+            matched_files = sorted(Path(path_to_files).glob(match_prefix))
+        except:
+            matched_files = []
+        if len(matched_files) > 0:
+            for file in matched_files:
+                new_file_path = f'{self.root_path}/{self.queue_name}'
+                rename(file, f'{new_file_path}/{new_prefix}_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db')
+        return
+
+    def on_start_cleanup(self):
+        """
+        call once prior to starting queues  
+        recovers any stale batches that were left uprocessed, by moving them to availables, to be picked up by the queue on restart.  
+        """
+        self._recover_stale('loading_*','avail')
+        self._recover_stale('assigned_*','avail')
+        pass
+
     def get_avail_length(self):
         """
         get count of *.avail files
@@ -248,8 +282,8 @@ class enqueue(_turbo_queue_base):
         path = f'{self.root_path}/{self.queue_name}'
         # Check whether the specified path exists or not
         self.check_path_and_create(path)
-        self._create_epoch = get_current_epoch_int()
-        self._db_name = f'{self._create_epoch}_{uuid.uuid4()}.db'
+        self._create_epoch = self.get_current_epoch_int()
+        self._db_name = f'{self._create_epoch}_{self.get_uuid()}.db'
         self.db_state = 'loading'
         self._db_path = f'{self.root_path}/{self.queue_name}/{self.db_state}_{self._db_name}'
         # improve:
@@ -321,7 +355,7 @@ class enqueue(_turbo_queue_base):
     
     async def check_batch_age(self):
         await asyncio.sleep(self._max_batch_age)
-        if (self._create_epoch + int(self._max_batch_age)) < get_current_epoch_int():
+        if (self._create_epoch + int(self._max_batch_age)) < self.get_current_epoch_int():
             self._roll_next_batch()
         self.loop.create_task(self.check_batch_age())
 
