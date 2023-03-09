@@ -83,7 +83,66 @@ while data:
 # call next(get_data) again to check the queue for more data
 ```
 
+### How it works
+
+#### Enqueue - loading data into a queue
+  
+A process begins using the enqueue class to load data into the "queue".  The "queue" is made up of files on disk.  The files are batches of data.  When the process has **filled** a batch, either by reaching the maximum items for a batch or by timeout (both configurable), the batch is "rolled" to be made "ready" to a dequeue process to use, and a new batch file is created and filled.
+
+#### Dequeue - unloading data from a queue
+  
+A process begins using the dequeue class to unload data from a "queue".  The "dequeue" process begins by scanning the chosen queue folder for any "ready" files, which are "batches" of data.  If one is found, it takes ownership of the file to ensure another process doesn't use it.  Once owned (by a renaming process) the data items are "yielded" to the calling process.  When the batch is exausted, the file is deleted, and the dequeue process begins again to look for any ready batches.
+
+#### File naming steps:
+
+1 - Enqueue creates a new, unique file for a batch of data:
+```
+loading_<epoch_time>_<uuid>.db
+```
+2 - Enqueue has filled the batch, and renames it to ready:
+```
+#rename:
+loading_<epoch_time>_<uuid>.db
+# to:
+ready_<epoch_time>_<uuid>.db
+```
+3 - Enqueue restarts the process, and creates a new, unique file for a batch of data  
+
+4 - Dequeue searches for files named ready_*.  When one is chosen, it is renamed to be used exclusively by the process:  
+```
+# rename:
+ready_<epoch_time>_<uuid>.db
+# to:
+chosen_<epoch_time>_<uuid>.db
+```
+5 - When dequeue has yielded all of the data in the batch, the file is deleted, and Dequeue looks for the next ready file.
+
+### Monitoring
+You can monitor the queues on disk by watching the queue folder:
+```
+# from the queue folder
+# update every 1 second, display in multiple columns if possib;e
+watch -n 1 ls -C
+```
 A sample view of the queue folder:
+
+In this sample, we are watching an enqueue from a Kafka topic, and a dequeue to a third party API:
+- The enqueue function is running in 6 processes
+  - This is noted by the "loading" files
+  - Any missing "loading" files (from a total of 6) of the loading processes is currently rolling over it's batch
+- The dequeue function is runing with 120 processes
+  - This is noted by the "chosen" files
+  - Only the active ones are seen, much less then 120
+  - This is ideal as there are ample processes available in the event the enqueue rate increases
+    - For example, in the static view below, there are 18 chosen files, so the current rate is 3 to 1, where the 6 enqueue functions (Kafka) are able to keep 18 (send to API) functions full
+- Two batches are waiting to be picked up in the static view
+  - This is noted by the 2 "ready" files
+  - Immedaitely after this screenshot, those files were selected by a dequeue process, and renamed accordingly
+
+Live view updated every second:
+![Alt Text](./monitor_queue.gif)
+
+A static view of the queue folder:
 ```
 chosen_1678299438_2beeab37-297d-4e11-ac19-c46ca1a93c23.db  chosen_1678299439_37a3780e-1d92-4777-8569-814cd73c084f.db  loading_1678299439_1669d269-4068-4731-a3b1-ef73f280cc16.db
 chosen_1678299438_4a052e83-a92b-48b4-908c-b3cc2856e4ee.db  chosen_1678299439_3c793ed4-b636-4117-88ea-86cf133d4540.db  loading_1678299439_696f8103-8ece-43c9-89ff-e2bacf55fb61.db
@@ -95,60 +154,3 @@ chosen_1678299438_fc02ae88-9296-4caa-8da7-ba2e5b939c1f.db  chosen_1678299439_b71
 chosen_1678299439_0601bab6-87c9-43aa-86c6-eb023000d7d1.db  chosen_1678299439_c946f4ba-3637-43dd-93ed-853d7f9d4cea.db
 chosen_1678299439_1d544ff3-d2c6-45d7-b7db-68ada0f8c875.db  chosen_1678299439_d9dc14a5-8452-48a3-bbc5-9c1ad9310ede.db
 ```  
-
-
-In this sample, we are watching an enqueue from a Kafka topic, and a dequeue to a third party API:
-- The enqueue function is running in 6 processes
-  - This is noted by the 5 "loading" files
-  - The missing 1 (for a total of 6) of the loading processes is currently rolling over it's batch
-- The dequeue function is runing with 120 processes
-  - This is noted by the 18 "chosen" files
-  - Only 18 are seen here
-  - This is ideal, there are ample processes available in the event the enqueue rate increases
-  - The current rate is 3 to 1, where the 6 enqueue functions (Kafka) are able to keep 18 (send to API) functions full
-- Two batches are waiting to be picked up
-  - This is noted by the 2 "ready" files
-  - Immedaitely after this screenshot, those files were selected by a dequeue process, and renamed accordingly
-
-Live view updated every second:
-![Alt Text](./monitor_queue.gif)
-### How it works
-
-#### Enqueue - loading data into a queue
-A process begins using the enqueue class to load data into the "queue".  The "queue" is made up of files on disk.  The files are batches of data.  When the process has **filled** a batch, either by reaching the maximum items for a batch or by timeout (both configurable), the batch is "rolled" to be made "ready" to a dequeue process to use, and a new batch file is created and filled.
-
-#### Dequeue - unloading data from a queue
-A process begins using the dequeue class to unload data from a "queue".  The "dequeue" process begins by scanning the chosen queue folder for any "ready" files, which are "batches" of data.  If one is found, it takes ownership of the file to ensure another process doesn't use it.  Once owned (by a renaming process) the data items are "yielded" to the calling process.  When the batch is exausted, the file is deleted, and the dequeue process begins again to look for any ready batches.
-
-#### File naming steps:
-
-1 - Enqueue creates a new, unique file for a batch of data:
-```
-loading_<epoch_time>_<uuid>.db
-```
-2 - Enqueue has filled the batch, and "rolls" (by renaming the file) it to ready:
-```
-#rename:
-loading_<epoch_time>_<uuid>.db
-# to:
-ready_<epoch_time>_<uuid>.db
-```
-3 - Enqueue restarts the process, and creates a new, unique file for a batch of data  
-
-4 - Dequeue searches for files named ready_*.  When one is selected, it is renamed to be used exclusively by the process:  
-```
-# rename:
-ready_<epoch_time>_<uuid>.db
-# to:
-chosen_<proc_num>_<epoch_time>_<uuid>.db
-```  
-The proc_num is provided by the calling process.  It allows insight to the process that is using the actual file.  Mostly useful for troubleshooting.  
-
-5 - When dequeue has yielded all of the data in the batch, the file is deleted, and Dequeue looks for the next ready file  
-
-### troubleshooting
-You can monitor the queues on disk by watching the queue folder:
-```
-# update every 1 second, display in multiple columns if possib;e
-watch -n 1 ls -C
-```
