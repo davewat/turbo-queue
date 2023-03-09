@@ -1,4 +1,4 @@
-__all__ = ['dequeue','enqueue'] 
+__all__ = ['dequeue','enqueue','startup'] 
 
 import logging
 import time
@@ -19,24 +19,24 @@ class _turbo_queue_base:
         #self._queue_folder = ''
         self._num_loaders = 1 # number of processes that will be loading the files (inbound)
         self._num_queues = 1 # number of queues/processes that will have the loaded files distributed amongst
-        self._max_avail_files = 1 # maximum number of avail files - loading will pause when reached
-        self._max_queue_files = 1 # maximum number of assigned to queue files assigned to a specific queue.loading will pause when reached
+        self._max_ready_files = 1 # maximum number of ready files - loading will pause when reached
         self._max_events_per_file = 80000 # maximum number of events per DB file that will be loaded, before a new DB file is created
         self._max_batch_age = 10 # approximate maximum number of seconds before a batch is flushed and a new one created 
         self._enqueue_active = False # pause/ resume loading to file
         self._dequeue_active = True # pause/ resume loading to queues
         self._processing_hold = False # additional hold while processing DB rename and recreate
+        self._remove_invalid = True # remove files marked as invalid
         
         # auto-recover stale events in the queue folder
-        # existing loading will be renamed to avail, to be picked up by the dequeue process when it is started
-        # existing or stale assigned 
+        # existing loading will be renamed to ready, to be picked up by the dequeue process when it is started
+        # existing or stale chosen 
         self._recover_on_restart = True # on start, in-case of shutdown while processing
         self._recover_on_stale = True # while running, check for stale events if processing stops
         self._recover_on_stale_check_frequency = 300 # frequency to check in seconds
         self._loading_stale_age = self._max_batch_age * 2 # default is _max_batch_age * 2 (seconds)
-        self._assigned_stale_age = 100 # this should be adjusted based on average time it takes to rpocess
+        self._chosen_stale_age = 100 # this should be adjusted based on average time it takes to rpocess
         
-        self._max_assigned_age = 100
+        self._max_chosen_age = 100
 
         self._drop_overflow = False # default of FALSE - used for TESTING ONLY - will DROP overflow rather than just change fold status
         self._db_conn = None
@@ -102,27 +102,17 @@ class _turbo_queue_base:
             raise ValueError("Sorry, num_queues must be an integer > 0")
         self._num_queues = a
     #
-    # max_avail_files - maximum number of avail(able) files - loading will pause when reached
+    # max_ready_files - maximum number of ready(able) files - loading will pause when reached
     @property
-    def max_avail_files(self):
-        return self._max_avail_files
-    @max_avail_files.setter
-    def max_avail_files(self, a):
+    def max_ready_files(self):
+        return self._max_ready_files
+    @max_ready_files.setter
+    def max_ready_files(self, a):
         if type(a) != int or a < 1:
-            raise ValueError("Sorry, max_avail_files must be an integer > 0")
-        self._max_avail_files = a
+            raise ValueError("Sorry, max_ready_files must be an integer > 0")
+        self._max_ready_files = a
     #
-    # max_queue_files - maximum number of ready files assigned to a specific queue - loading will pause when reached
-    @property
-    def max_queue_files(self):
-        return self._max_queue_files
-    @max_queue_files.setter
-    def max_queue_files(self, a):
-        if type(a) != int or a < 1:
-            raise ValueError("Sorry, max_queue_files must be an integer > 0")
-        self._max_queue_files = a
-    #
-    # max_events_per_file - maximum number of events in a batch - a new batch will be generated and used when reached, and this will be made available
+    # max_events_per_file - maximum number of events in a batch - a new batch will be generated and used when reached, and this will be made ready
     @property
     def max_events_per_file(self):
         return self._max_events_per_file
@@ -183,6 +173,16 @@ class _turbo_queue_base:
             raise ValueError("Sorry, drop_overflow must be True or False")
         self._drop_overflow = a
     #
+    # remove_invalid - remove files marked as invalid
+    @property
+    def remove_invalid(self):
+        return self._remove_invalid
+    @remove_invalid.setter
+    def remove_invalid(self, a):
+        if type(a) != bool:
+            raise ValueError("Sorry, remove_invalid must be True or False")
+        self._remove_invalid = a
+    #
     def setup_logging(self,logger_name = __name__,level = logging.WARNING,log_file = 'turbo_queue.log'):
         self.logger = logging.getLogger(logger_name)  
         self.logger.setLevel(level)
@@ -199,6 +199,7 @@ class _turbo_queue_base:
         return
     
     def _recover_stale(self,match_prefix,new_prefix):
+        print(f'recover_stale: {match_prefix} {new_prefix}')
         path_to_files = f'{self.root_path}/{self.queue_name}'
         try:
             matched_files = sorted(Path(path_to_files).glob(match_prefix))
@@ -207,38 +208,51 @@ class _turbo_queue_base:
         if len(matched_files) > 0:
             for file in matched_files:
                 new_file_path = f'{self.root_path}/{self.queue_name}'
-                rename(file, f'{new_file_path}/{new_prefix}_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db')
+                file_error = False
+                # validate SQLITE integrity:
+                con = sqlite3.connect(file)
+                cur = con.cursor()
+                try:
+                    cur.execute("PRAGMA integrity_check")
+                except sqlite3.DatabaseError:
+                    file_error = True
+                con.close()
+                if not file_error:
+                    if os.path.getsize(file) == 0:
+                        file_error = True
+                if file_error:
+                    if self._remove_invalid:
+                        try:
+                            os.remove(file)
+                        except:
+                            rename(file, f'{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db')
+                    else:
+                        rename(file, f'{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db')
+                else:
+                    rename(file, f'{new_file_path}/{new_prefix}_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db')
+        print(f'recover_stale complete: {match_prefix} {new_prefix}')
         return
 
-    def on_start_cleanup(self):
+    def get_ready_length(self):
         """
-        call once prior to starting queues  
-        recovers any stale batches that were left uprocessed, by moving them to availables, to be picked up by the queue on restart.  
+        get count of *.ready files
         """
-        self._recover_stale('loading_*','avail')
-        self._recover_stale('assigned_*','avail')
-        pass
-
-    def get_avail_length(self):
-        """
-        get count of *.avail files
-        """
-        path_to_avail = f'{self.root_path}/{self.queue_name}'
+        path_to_ready = f'{self.root_path}/{self.queue_name}'
         try:
-            matched_files = sorted(Path(path_to_avail).glob('avail_*'))
+            matched_files = sorted(Path(path_to_ready).glob('ready_*'))
         except:
             matched_files = []
         return len(matched_files)
     
     def update_enqueue_active_state(self):
         """
-        check the number of avail(able) files and update the state if it does/not exceed the max
+        check the number of ready(able) files and update the state if it does/not exceed the max
         """
         if self.enqueue_active == False and self.processing_hold == False:
-            if self.get_avail_length() < self.max_avail_files:
+            if self.get_ready_length() < self.max_ready_files:
                 self.enqueue_active = True
                 self.logger.info(f'update_enqueue_active_state to True {self._queue_name}')
-        elif self.get_avail_length() >= self.max_avail_files:
+        elif self.get_ready_length() >= self.max_ready_files:
             self.enqueue_active = False
         return
     
@@ -255,17 +269,37 @@ class _turbo_queue_base:
                 print(f'create error {e}')
         return
     
-    def get_next_available_file(self):
+    def get_next_ready_file(self):
         """
-        get the next available file
-        return None if none available or error
+        get the next ready file
+        return None if none ready or error
         """
         pp = f'{self.root_path}/{self.queue_name}'
         try:
-            next_file = str(sorted(Path(pp).glob('avail_*'))[0])
+            next_file = str(sorted(Path(pp).glob('ready_*'))[0])
         except:
             next_file = None
         return next_file
+
+class startup(_turbo_queue_base):
+    """ class with methods for startup operations"""
+    def __init__(self):
+        self.desc = 'turbo_queue class for queue high performance'
+        super().__init__()
+    
+    def on_start_cleanup(self):
+        """
+        call once prior to starting queues  
+        recovers any stale batches that were left uprocessed, by moving them to ready, to be picked up by the queue on restart.  
+        """
+        self._recover_stale('loading_*','ready')
+        self._recover_stale('chosen_*','ready')
+        #
+        # for upgrade:
+        self._recover_stale('avail_*','ready')
+        self._recover_stale('assigned_*','ready')
+        return
+
 
 class enqueue(_turbo_queue_base):
     """ class with methods for loading the queue"""
@@ -275,8 +309,8 @@ class enqueue(_turbo_queue_base):
         self._create_epoch = 1 # default value to start
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.loop.create_task(self.check_batch_age())
-        self.loop.run_forever()
+        #self.loop.create_task(self.check_batch_age())
+        #self.loop.run_forever()
     #
     def _new_loading_db(self):
         path = f'{self.root_path}/{self.queue_name}'
@@ -339,7 +373,7 @@ class enqueue(_turbo_queue_base):
         #
         self.row_count = 0
         self._close_db()
-        rename(self._db_path, f'{self.root_path}/{self.queue_name}/avail_{self._db_name}')
+        rename(self._db_path, f'{self.root_path}/{self.queue_name}/ready_{self._db_name}')
         self._new_loading_db()
         self.update_enqueue_active_state()
         self.processing_hold = False
@@ -386,10 +420,10 @@ class dequeue(_turbo_queue_base):
             #<do something with doc>
     """
 
-    def __init__(self,proc_num):
+    def __init__(self,proc_num = None):
         self.desc = 'turbo_queue class for high performance IPC'
         super().__init__()
-        self.proc_num = proc_num
+        self.proc_num = None
         self._total_gets = 0
         self._total_batch = 0
         self._auto_cleanup = True
@@ -416,7 +450,7 @@ class dequeue(_turbo_queue_base):
         clean-up process called to remove the current batch after all events have been processed
         this is automatically called by default.  
         Setting auto_cleanup to False will allow you to call in manually (or raise errors and not process).  
-        You MUST call cleanup() after the last get()-yield if you wish to continue to the next available batch,
+        You MUST call cleanup() after the last get()-yield if you wish to continue to the next ready batch,
         otherwise, you are choosing to leave the batch
         """
         self._close_db()
@@ -436,7 +470,7 @@ class dequeue(_turbo_queue_base):
         -------
         A yieldable pointer to the next data set
         OR
-        None, when batch is completed (no more data) or there is no available batch
+        None, when batch is completed (no more data) or there is no ready batch
 
         Examples
         --------
@@ -446,7 +480,7 @@ class dequeue(_turbo_queue_base):
                 <do something with doc>
         """
         if self._db_path == None:
-            result = self._get_assigned_from_avail()
+            result = self._get_chosen_from_ready()
             if result == False:
                 yield None
             else:
@@ -486,28 +520,30 @@ class dequeue(_turbo_queue_base):
             self.logger.info(f'ERROR opening database for first time{self._db_path}')
             return False
 
-    def _get_assigned_from_avail(self):
+    def _get_chosen_from_ready(self):
         """
-        get a path to an 'assigned' file to process, from one of the 'avail'able files
-        will attempt max_attempts times to get an available file set to self_db_path
-        will return True when successful or when already assigned
+        get a path to a 'chosen' file to process, from one of the 'ready'able files
+        will attempt max_attempts times to get a ready file set to self_db_path
+        will return True when successful or when already chosen
         will return False after 10 failed attempts, allowing the calling process to reset and try again
         """
-        
         attempts = 0
         max_attempts = 10
         while attempts < max_attempts:
             attempts += 1
             path1 = f'{self.root_path}/{self.queue_name}'
             self.check_path_and_create(path1)
-            next_file = self.get_next_available_file()
+            next_file = self.get_next_ready_file()
             if next_file:
                 try:
                     # quickly grab the file
                     rename(next_file, f'{next_file}_temp_hold')
                     filename = os.path.basename(next_file)
                     filename_parts = filename.split('_',1)
-                    new_name = f'assigned_{self.proc_num}_{filename_parts[1]}'
+                    if self.proc_num:
+                        new_name = f'chosen_{filename_parts[1]}_{self.proc_num}'
+                    else:
+                        new_name = f'chosen_{filename_parts[1]}'
                     new_path = f'{self.root_path}/{self.queue_name}/{new_name}'
                     rename(f'{next_file}_temp_hold', new_path)
                     self._db_path = new_path
