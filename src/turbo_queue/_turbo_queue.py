@@ -274,10 +274,11 @@ class _turbo_queue_base:
                         try:
                             os.remove(file)
                         except:
-                            rename(
-                                file,
-                                f"{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
-                            )
+                            #rename(
+                            #    file,
+                            #    f"{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
+                            #)
+                            pass
                     else:
                         rename(
                             file,
