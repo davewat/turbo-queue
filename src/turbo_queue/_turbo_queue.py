@@ -264,7 +264,10 @@ class _turbo_queue_base:
                     file_error = True
                 con.close()
                 if not file_error:
-                    if os.path.getsize(file) == 0:
+                    try:
+                        if os.path.getsize(file) == 0:
+                            file_error = True
+                    except:
                         file_error = True
                 if file_error:
                     if self._remove_invalid:
