@@ -1,4 +1,4 @@
-__all__ = ["dequeue", "enqueue", "startup"]
+__all__ = ["Dequeue", "Enqueue", "Startup"]
 
 import asyncio
 import json
@@ -12,31 +12,30 @@ from os import rename
 from pathlib import Path
 
 
-class _turbo_queue_base:
+class _TurboQueueBase:
     def __init__(self):
         # self._age = 0
+        self.version = "0.7.0.0"
         self._queue_name = "example_queue_name"  # name of the queue
         self._root_path = "/dc_data"
         # self._queue_folder = ''
-        self._num_loaders = (
-            1  # number of processes that will be loading the files (inbound)
-        )
+        self._num_loaders = 1  # number of processes that will load the files (inbound)
         self._num_queues = 1  # number of queues/processes that will have the loaded files distributed amongst
         self._max_ready_files = (
-            1  # maximum number of ready files - loading will pause when reached
+            1  # maximum number of ready files - load will pause when reached
         )
         self._max_events_per_file = 80000  # maximum number of events per DB file that will be loaded, before a new DB file is created
         self._max_batch_age = 10  # approximate maximum number of seconds before a batch is flushed and a new one created
-        self._enqueue_active = False  # pause/ resume loading to file
-        self._dequeue_active = True  # pause/ resume loading to queues
+        self._enqueue_active = False  # pause/ resume load to file
+        self._dequeue_active = True  # pause/ resume load to queues
         self._processing_hold = (
             False  # additional hold while processing DB rename and recreate
         )
         self._remove_invalid = True  # remove files marked as invalid
 
         # auto-recover stale events in the queue folder
-        # existing loading will be renamed to ready, to be picked up by the dequeue process when it is started
-        # existing or stale chosen
+        # existing load will be renamed to ready, to be picked up by the dequeue process when it is started
+        # existing or stale unload
         self._recover_on_restart = (
             True  # on start, in-case of shutdown while processing
         )
@@ -44,14 +43,14 @@ class _turbo_queue_base:
             True  # while running, check for stale events if processing stops
         )
         self._recover_on_stale_check_frequency = 300  # frequency to check in seconds
-        self._loading_stale_age = (
+        self._load_stale_age = (
             self._max_batch_age * 2
         )  # default is _max_batch_age * 2 (seconds)
-        self._chosen_stale_age = (
+        self._unload_stale_age = (
             100  # this should be adjusted based on average time it takes to rpocess
         )
 
-        self._max_chosen_age = 100
+        self._max_unload_age = 100
 
         self._drop_overflow = False  # default of FALSE - used for TESTING ONLY - will DROP overflow rather than just change fold status
         self._db_conn = None
@@ -104,7 +103,7 @@ class _turbo_queue_base:
     """
 
     #
-    # num_loaders - number of processes that will be loading the files (inbound)
+    # num_loaders - number of processes that will load the files (inbound)
     @property
     def num_loaders(self):
         return self._num_loaders
@@ -128,7 +127,7 @@ class _turbo_queue_base:
         self._num_queues = a
 
     #
-    # max_ready_files - maximum number of ready(able) files - loading will pause when reached
+    # max_ready_files - maximum number of ready(able) files - load will pause when reached
     @property
     def max_ready_files(self):
         return self._max_ready_files
@@ -164,7 +163,7 @@ class _turbo_queue_base:
         self._max_batch_age = a
 
     #
-    # enqueue_active - pause/ resume loading to file
+    # enqueue_active - pause/ resume load to file
     @property
     def enqueue_active(self):
         return self._enqueue_active
@@ -176,7 +175,7 @@ class _turbo_queue_base:
         self._enqueue_active = a
 
     #
-    # dequeue_active - pause/ resume loading to queues
+    # dequeue_active - pause/ resume load to queues
     @property
     def dequeue_active(self):
         return self._dequeue_active
@@ -188,7 +187,7 @@ class _turbo_queue_base:
         self._dequeue_active = a
 
     #
-    # processing_hold - pause/ resume loading to queues
+    # processing_hold - pause/ resume load to queues
     @property
     def processing_hold(self):
         return self._processing_hold
@@ -201,7 +200,7 @@ class _turbo_queue_base:
 
     #
 
-    # drop_overflow - pause/ resume loading to queues
+    # drop_overflow - pause/ resume load to queues
     @property
     def drop_overflow(self):
         return self._drop_overflow
@@ -274,21 +273,27 @@ class _turbo_queue_base:
                         try:
                             os.remove(file)
                         except:
-                            #rename(
+                            # rename(
                             #    file,
                             #    f"{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
-                            #)
+                            # )
                             pass
                     else:
+                        try:
+                            rename(
+                                file,
+                                f"{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
+                            )
+                        except:
+                            pass
+                else:
+                    try:
                         rename(
                             file,
-                            f"{new_file_path}/invalid_file_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
+                            f"{new_file_path}/{new_prefix}_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
                         )
-                else:
-                    rename(
-                        file,
-                        f"{new_file_path}/{new_prefix}_{self.get_current_epoch_int()}_{self.get_uuid()}_recovered.db",
-                    )
+                    except:
+                        pass
         print(f"recover_stale complete: {match_prefix} {new_prefix}")
         return
 
@@ -343,11 +348,9 @@ class _turbo_queue_base:
         return next_file
 
 
-class startup(_turbo_queue_base):
-    """class with methods for startup operations"""
-
+class Startup(_TurboQueueBase):
     def __init__(self):
-        self.desc = "turbo_queue class for queue high performance"
+        """class with methods for startup operations"""
         super().__init__()
 
     def on_start_cleanup(self):
@@ -355,20 +358,22 @@ class startup(_turbo_queue_base):
         call once prior to starting queues
         recovers any stale batches that were left uprocessed, by moving them to ready, to be picked up by the queue on restart.
         """
+        self._recover_stale("load_*", "ready")
+        self._recover_stale("unload_*", "ready")
+        #
+        # for upgrade < 0.6.0.0:
         self._recover_stale("loading_*", "ready")
         self._recover_stale("chosen_*", "ready")
         #
-        # for upgrade:
+        # for upgrade < 0.2.0.0:
         self._recover_stale("avail_*", "ready")
         self._recover_stale("assigned_*", "ready")
         return
 
 
-class enqueue(_turbo_queue_base):
-    """class with methods for loading the queue"""
-
+class Enqueue(_TurboQueueBase):
     def __init__(self):
-        self.desc = "turbo_queue class for queue high performance"
+        """class with methods for load the queue"""
         super().__init__()
         self._create_epoch = 1  # default value to start
         self.loop = asyncio.new_event_loop()
@@ -377,13 +382,13 @@ class enqueue(_turbo_queue_base):
         # self.loop.run_forever()
 
     #
-    def _new_loading_db(self):
+    def _new_load_db(self):
         path = f"{self.root_path}/{self.queue_name}"
         # Check whether the specified path exists or not
         self.check_path_and_create(path)
         self._create_epoch = self.get_current_epoch_int()
         self._db_name = f"{self._create_epoch}_{self.get_uuid()}.db"
-        self.db_state = "loading"
+        self.db_state = "load"
         self._db_path = (
             f"{self.root_path}/{self.queue_name}/{self.db_state}_{self._db_name}"
         )
@@ -405,7 +410,7 @@ class enqueue(_turbo_queue_base):
         return
 
     #
-    def insert_loading_db(self, log_data):
+    def insert_load_db(self, log_data):
         """
         insert data into DB
         """
@@ -417,9 +422,9 @@ class enqueue(_turbo_queue_base):
     #
     def start(self):
         """
-        create an initial DB to begin loading data into
+        create an initial DB to begin load data into
         """
-        self._new_loading_db()
+        self._new_load_db()
         return
 
     #
@@ -432,7 +437,7 @@ class enqueue(_turbo_queue_base):
             # WIP
             pass
         else:
-            self.insert_loading_db(dict_to_add)
+            self.insert_load_db(dict_to_add)
             self.row_count += 1
             if self.row_count >= self.max_events_per_file:
                 self._roll_next_batch()
@@ -448,7 +453,7 @@ class enqueue(_turbo_queue_base):
         rename(
             self._db_path, f"{self.root_path}/{self.queue_name}/ready_{self._db_name}"
         )
-        self._new_loading_db()
+        self._new_load_db()
         self.update_enqueue_active_state()
         self.processing_hold = False
         return
@@ -470,35 +475,29 @@ class enqueue(_turbo_queue_base):
         self.loop.create_task(self.check_batch_age())
 
 
-class dequeue(_turbo_queue_base):
-    """Class to remove data from a Turbo Queue
-
-    Parameters
-    ----------
-    proc_num(required)
-        An integer to uniquely identify this process vs other processes that will dequeue from this queue.
-
-    Returns
-    -------
-    New dequeue object
-        A dequeue object.  Additional parameters can be set.  Primary function is get()
-
-    Examples
-    --------
-    >>> import turbo_queue
-    >>> my_out_queue = turbo_queue.dequeue(1)
-    >>> my_out_queue.root_path = '/path/to/queue'
-    >>> my_out_queue.queue_name = 'my_queue'
-    >>> get_data = my_out_queue.get()
-    >>> doc = next(get_data)
-    >>> while doc:
-            #<do something with doc>
-    """
-
+class Dequeue(_TurboQueueBase):
     def __init__(self, proc_num=None):
-        self.desc = "turbo_queue class for high performance IPC"
+        """Class to remove data from a Turbo Queue
+
+        Args:
+            proc_num (integer, optional): unique number to track individual processes. Defaults to None.
+
+        Returns:
+            Dequeue: A Dequeue object.  Additional parameters can be set.  Primary function is get()
+
+        Example:
+            >>> import turbo_queue
+            >>> my_out_queue = turbo_queue.Dequeue(1)
+            >>> my_out_queue.root_path = '/path/to/queue'
+            >>> my_out_queue.queue_name = 'my_queue'
+            >>> get_data = my_out_queue.get()
+            >>> doc = next(get_data)
+            >>> while doc:
+                >>> #<do something with doc>
+
+        """
         super().__init__()
-        self.proc_num = None
+        self.proc_num = proc_num
         self._total_gets = 0
         self._total_batch = 0
         self._auto_cleanup = True
@@ -529,7 +528,7 @@ class dequeue(_turbo_queue_base):
         this is automatically called by default.
         Setting auto_cleanup to False will allow you to call in manually (or raise errors and not process).
         You MUST call cleanup() after the last get()-yield if you wish to continue to the next ready batch,
-        otherwise, you are choosing to leave the batch
+        otherwise, you are choosing to leave the batch on disk, and it will be reprocessed
         """
         self._close_db()
         file_remove(self._db_path)
@@ -559,11 +558,19 @@ class dequeue(_turbo_queue_base):
                 <do something with doc>
         """
         if self._db_path == None:
-            result = self._get_chosen_from_ready()
+            result = self._get_unload_from_ready()
             if result == False:
                 yield None
             else:
                 self._total_batch += 1
+        # verify table:
+        listOfTables = self._db_conn.execute(
+            """SELECT name FROM sqlite_master WHERE type='table'
+            AND name='logs'; """
+        ).fetchall()
+
+        if listOfTables == []:
+            yield None
         for row in self._db_conn.execute("SELECT log_data FROM logs"):
             # WIP
             # self.totalMessages += 1
@@ -601,11 +608,11 @@ class dequeue(_turbo_queue_base):
             self.logger.info(f"ERROR opening database for first time{self._db_path}")
             return False
 
-    def _get_chosen_from_ready(self):
+    def _get_unload_from_ready(self):
         """
-        get a path to a 'chosen' file to process, from one of the 'ready'able files
+        get a path to a 'unload' file to process, from one of the 'ready'able files
         will attempt max_attempts times to get a ready file set to self_db_path
-        will return True when successful or when already chosen
+        will return True when successful or when already unload
         will return False after 10 failed attempts, allowing the calling process to reset and try again
         """
         attempts = 0
@@ -622,9 +629,9 @@ class dequeue(_turbo_queue_base):
                     filename = os.path.basename(next_file)
                     filename_parts = filename.split("_", 1)
                     if self.proc_num:
-                        new_name = f"chosen_{filename_parts[1]}_{self.proc_num}"
+                        new_name = f"unload_{filename_parts[1]}_{self.proc_num}"
                     else:
-                        new_name = f"chosen_{filename_parts[1]}"
+                        new_name = f"unload_{filename_parts[1]}"
                     new_path = f"{self.root_path}/{self.queue_name}/{new_name}"
                     rename(f"{next_file}_temp_hold", new_path)
                     self._db_path = new_path
