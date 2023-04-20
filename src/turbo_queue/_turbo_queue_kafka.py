@@ -199,7 +199,7 @@ class KafkaEnqueue(_KafkaTurboQueueBase):
         ):
             logging.info("kafka_consumer_to_connector start3")
             # self.enqueue = fast_queue.enqueue()
-            self.enqueue = turbo_queue.enqueue()
+            self.enqueue = turbo_queue.Enqueue()
             self.enqueue.setup_logging()
             self.enqueue.queue_name = self._turbo_queue_queue_name
             self.enqueue.root_path = self._turbo_queue_root_path
@@ -299,7 +299,7 @@ class KafkaDequeue(_KafkaTurboQueueBase):
     def start(self):
         self.producer = Producer(self.settings())
         if self.use_turbo_queue:
-            self.connector_dequeue = turbo_queue.dequeue()
+            self.connector_dequeue = turbo_queue.Dequeue()
             self.connector_dequeue.root_path = self._turbo_queue_root_path
             self.connector_dequeue.queue_name = self._turbo_queue_queue_name
             self.loop.create_task(self.loadEvents())
