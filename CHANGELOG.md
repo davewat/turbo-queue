@@ -8,6 +8,11 @@ Notable changes to this project will be documented in this file.  Breaking chang
 - examples
 - process specific connectors
 
+## [0.7.2] - 2023-04-20
+
+### Fixed
+- Update class names in Kafka connector
+
 ## [0.7.1] - 2023-04-20
 
 ### Added
