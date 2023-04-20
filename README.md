@@ -1,22 +1,25 @@
-WIP  
-*Not ready for PRs yet*
+
 
 ### Install
 ```
 pip install turbo-queue
 ```
-
+#### Project Status
+WIP - Not ready for PRs yet
 
 # Turbo Queue
-High performance, multi-processing queue. Works across child processes, and even between indivdual Python applications!
-
+High performance, multi-processing queue. Works across child processes, and even between individual Python applications!
 
 # Contents
- - [Overview](#Overview) 
- - [Quickstart](#Quickstart) 
+ - [Overview](#overview)
+ - [Use Cases](#use-cases)
+ - [Solution](#solution)
+ - [Results](#results)
+ - [Quickstart](#quickstart)
+ - [How It Works](docs/how_it_works.md)
 
 ## Overview
-Turbo Queue is used in place of the Python Multiprocessing Queue, with simple add/get symantecs, allowing you to create multiple processes that share a queue.
+Turbo Queue is used in place of the Python Multiprocessing Queue with simple add/get semantics, allowing you to create multiple processes that share a queue.
 
 Turbo Queue was designed to improve performance in situations where the Python Multiprocessing Queues is typically used. We found that as the number of processes subscribed to a single Multiprocessing Queue increased, the performance improvement on each successive process decreased. This appeared to be due to contention, with the processes locking/unlocking the queue to load/get data.
 
@@ -26,22 +29,16 @@ Turbo Queue was designed to improve performance in situations where the Python M
 - Stream data from Kafka, reformat, and send to a service API.
 - Pull data from an API at high volume, process, and send to another API.
 
-
 ## Solution
-Our solution was to develop the Turbo Queue class. It is a shared nothing "queue" that uses the file system to provide the basis for coordination between the process. We use an agreed upon set of rules (as defined in the class) to create and manage files to store and process the data. SQLite is used a high-performance file storage format. File names (and re-naming) are used as the control mechanisms. In our use case we work in batches of data, and that is utilized here as well. We allow tuning of the batch size (which equates to the rows in the SQLite file) for optimal performance. A side benefit of the shared nothing approach allows entirely seperate applications (not just sub-processes) to use the queue.
+Our solution was to develop the Turbo Queue class. It is a shared nothing "queue" that uses the file system to provide the basis for coordination between the process. We use an agreed upon set of rules (as defined in the class) to create and manage files to store and process the data. SQLite is used a high-performance file storage format. File names (and re-naming) are used as the control mechanisms. In our use case we work in batches of data, and that is utilized here as well. We allow tuning of the batch size (which equates to the rows in the SQLite file) for optimal performance. A side benefit of the shared nothing approach allows entirely separate applications (not just sub-processes) to use the queue.
 
 ## Results
-Before Turbo Queue, using the built-in Multiprocessing Queue resulted in deminishing returns with 3 or more processes. While performance increased with each process, the throughput was not well correlated to the number of processes. 
+Before Turbo Queue, using the built-in Multiprocessing Queue resulted in diminishing returns with 3 or more processes. While performance increased with each process, the throughput was not well correlated to the number of processes. 
   
-However, with Turbo Queue, we were able to max out our processors on a single system(40+) with a substantial throughput increase. We actually began to hit limitations with our network and Kafka stack. In one instance, we were able to reduce our requirements from 40 python applications (running 2 subprocesses each), to 2 python apps with 30 subprocesses.
+However, with Turbo Queue, we were able to max out our processors on a single system(40+) with a substantial throughput increase. We began to hit limitations with our network and Kafka stack. In one instance, we were able to reduce our requirements from 40 python applications (running 2 subprocesses each), to 2 python apps with 30 subprocesses.
 
 ## Will this help you?
-YMMV. This worked well for our use case: CPU intesive processes, moving large volumes of data to and from Kafka and other services, and CPU dense hardware.
-
-## Documentation
-wip
-
-[How It Works](docs/how_it_works.md)
+YMMV. This worked well for our use case: CPU intensive processes, moving large volumes of data to and from Kafka and other services, and CPU dense hardware.
 
 ## Quickstart
 A very basic example:  
