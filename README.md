@@ -6,6 +6,7 @@ pip install turbo-queue
 ```
 #### Project Status
 WIP - Not ready for PRs yet
+Code is stable, no changes planned for near future.
 
 # Turbo Queue
 High performance, multi-processing queue. Works across child processes, and even between individual Python applications!
