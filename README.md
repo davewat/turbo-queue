@@ -5,7 +5,7 @@
 pip install turbo-queue
 ```
 #### Project Status
-WIP - Not ready for PRs yet
+WIP - Not ready for PRs yet  
 Code is stable, no changes planned for near future.
 
 # Turbo Queue
